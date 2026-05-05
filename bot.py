@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -20,6 +21,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from aiohttp_socks import ProxyConnector
+
+from proxy_manager import ProxyManager
 
 # Optional Playwright runtime import
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
@@ -459,7 +463,16 @@ async def main():
     cfg = load_config()
     ensure_dirs(cfg)
 
-    bot = Bot(token=token)
+    proxy_manager = ProxyManager(refresh_minutes=30)
+    try:
+        socks_proxy = await proxy_manager.select_working_proxy()
+    except RuntimeError as e:
+        logging.critical("Бот остановлен: %s", e)
+        raise
+
+    connector = ProxyConnector.from_url(socks_proxy)
+    session = AiohttpSession(connector=connector)
+    bot = Bot(token=token, session=session)
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.message.register(cmd_start, Command("start"))
@@ -477,7 +490,9 @@ async def main():
     schedule_jobs(scheduler, bot)
     scheduler.start()
 
-    logging.info("Bot started")
+    asyncio.create_task(proxy_manager.background_refresh_loop())
+
+    logging.info("Bot started (proxy=%s)", socks_proxy)
     await dp.start_polling(bot)
 
 
